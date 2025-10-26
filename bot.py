@@ -21,7 +21,7 @@ log = logging.getLogger("scienze-bot")
 # Environment / config
 DISCORD_TOKEN = os.environ.get("DISCORD_TOKEN")
 HUGGINGFACE_API_KEY = os.environ.get("HUGGINGFACE_API_KEY")
-HF_MODEL = os.environ.get("HF_MODEL", "bigscience/bloomz-1b1")
+HF_MODEL = os.environ.get("HF_MODEL", "google/flan-t5-base")
 PORT = int(os.environ.get("PORT", 8080))
 TESSERACT_LANG = os.environ.get("TESSERACT_LANG", "ita")
 # max characters to speak in voice (avoid very long TTS)
@@ -60,8 +60,13 @@ async def start_webserver():
     await site.start()
     log.info(f"Health webserver avviato sulla porta {PORT}")
 
-def call_hf_inference_sync(prompt: str, model: str = HF_MODEL, timeout: int = 60):
-    url = f"https://api-inference.huggingface.co/models/{model}"
+
+def call_hf_inference_sync(prompt: str, model: str = None, timeout: int = 60):
+    """
+    Call Hugging Face Inference API with a fallback list of models.
+    Tries models in order and returns the first successful generated text.
+    Raises RuntimeError if none succeed.
+    """
     headers = {"Authorization": f"Bearer {HUGGINGFACE_API_KEY}"}
     payload = {
         "inputs": prompt,
@@ -71,27 +76,60 @@ def call_hf_inference_sync(prompt: str, model: str = HF_MODEL, timeout: int = 60
             "return_full_text": False
         }
     }
-    try:
-        resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
-        resp.raise_for_status()
-        data = resp.json()
-        if isinstance(data, dict) and data.get("error"):
-            raise RuntimeError(f"HuggingFace error: {data.get('error')}")
-        if isinstance(data, list) and data and "generated_text" in data[0]:
-            return data[0]["generated_text"].strip()
-        return str(data)
-    except Exception as e:
-        log.exception("Errore chiamando HuggingFace Inference API")
-        raise
+
+    candidate_models = [
+        model or os.environ.get("HF_MODEL"),
+        "google/flan-t5-base",
+        "google/flan-t5-small",
+        "bigscience/bloom-1b1",
+        "gpt2"
+    ]
+
+    last_exc = None
+    for m in candidate_models:
+        if not m:
+            continue
+        url = f"https://api-inference.huggingface.co/models/{m}"
+        try:
+            resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
+            resp.raise_for_status()
+            data = resp.json()
+            # If API returns an error field, treat as failure for this model
+            if isinstance(data, dict) and data.get("error"):
+                last_exc = RuntimeError(f"HuggingFace error for {m}: {data.get('error')}")
+                log.warning("Model %s returned error: %s", m, data.get("error"))
+                continue
+            # Typical generation response is a list with generated_text
+            if isinstance(data, list) and data and isinstance(data[0], dict) and "generated_text" in data[0]:
+                return data[0]["generated_text"].strip()
+            # Some models may return a dict with 'generated_text'
+            if isinstance(data, dict) and "generated_text" in data:
+                return data["generated_text"].strip()
+            # Fallback: return stringified JSON
+            return str(data)
+        except requests.HTTPError as he:
+            # 404 or other HTTP errors -> try next model
+            last_exc = he
+            log.warning("HTTP error for model %s: %s", m, he)
+            continue
+        except Exception as e:
+            last_exc = e
+            log.exception("Error when calling model %s", m)
+            continue
+
+    raise RuntimeError(f"Nessun modello HF disponibile. Ultima eccezione: {last_exc}")
+
 
 @bot.event
 async def on_ready():
     log.info(f"Bot connesso come {bot.user} (id: {bot.user.id})")
 
+
 def get_guild_lock(guild_id: int):
     if guild_id not in guild_locks:
         guild_locks[guild_id] = asyncio.Lock()
     return guild_locks[guild_id]
+
 
 @bot.event
 async def on_message(message: discord.Message):
@@ -260,10 +298,12 @@ async def on_message(message: discord.Message):
         except Exception:
             pass
 
+
 # Avvio: crea task per webserver e poi avvia bot
 async def main():
     await start_webserver()
     await bot.start(DISCORD_TOKEN)
+
 
 if __name__ == "__main__":
     try:
