@@ -310,3 +310,62 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         log.info("Terminato dall'utente")
+# Inserisci questo blocco vicino alla definizione delle altre funzioni nel file bot.py
+import json
+
+# LLM provider: "deepseek" o "huggingface"
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "").lower()
+
+# DeepSeek config (da impostare su Render)
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY")
+DEEPSEEK_ENDPOINT = os.environ.get("DEEPSEEK_ENDPOINT", "https://api.deepseek.com/v1/chat/completions")
+DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
+
+def call_deepseek_sync(system_prompt: str, user_prompt: str, timeout: int = 60):
+    if not DEEPSEEK_API_KEY:
+        raise RuntimeError("DEEPSEEK_API_KEY non impostato")
+    headers = {
+        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    payload = {
+        "model": DEEPSEEK_MODEL,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ],
+        "temperature": 0.2,
+        "max_tokens": 512,
+        "stream": False
+    }
+    resp = requests.post(DEEPSEEK_ENDPOINT, headers=headers, json=payload, timeout=timeout)
+    resp.raise_for_status()
+    data = resp.json()
+
+    # Parsing comune: choices -> message -> content OR choices[].text
+    if isinstance(data, dict) and "choices" in data and data["choices"]:
+        first = data["choices"][0]
+        # openai-style: {"message": {"role":"assistant","content":"..."}}
+        if isinstance(first, dict):
+            if "message" in first and isinstance(first["message"], dict) and "content" in first["message"]:
+                return first["message"]["content"].strip()
+            if "text" in first:
+                return first["text"].strip()
+    # fallback: prova a leggere campi comuni
+    if isinstance(data, dict) and "result" in data:
+        return str(data["result"]).strip()
+    # fallback: stringify
+    return str(data)
+
+# Usa la funzione esistente call_hf_inference_sync già presente per Hugging Face (fallback)
+# Definisci una funzione generica che sceglie il provider
+def call_llm_sync(system_prompt: str, user_prompt: str, timeout: int = 60):
+    """
+    Se LLM_PROVIDER == 'deepseek' usa DeepSeek (chat API).
+    Altrimenti converte i prompt in singola stringa e usa call_hf_inference_sync (fallback).
+    """
+    if LLM_PROVIDER == "deepseek":
+        return call_deepseek_sync(system_prompt, user_prompt, timeout=timeout)
+    # Fallback: unisci system+user in un singolo prompt per l'Hugging Face function esistente
+    combined = f"{system_prompt}\n\n{user_prompt}"
+    return call_hf_inference_sync(combined, model=os.environ.get("HF_MODEL"), timeout=timeout)
