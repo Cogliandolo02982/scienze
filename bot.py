@@ -14,6 +14,19 @@ from gtts import gTTS
 import requests
 from aiohttp import web
 
+# Inserisci questo blocco vicino alla definizione delle altre funzioni nel file bot.py
+import json
+
+# LLM provider: "deepseek" o "huggingface"
+LLM_PROVIDER = os.environ.get("LLM_PROVIDER", "").lower()
+
+# DeepSeek config (da impostare su Render)
+DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY")
+DEEPSEEK_ENDPOINT = os.environ.get("DEEPSEEK_ENDPOINT", "https://api.deepseek.com/v1/chat/completions")
+DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-chat")
+
+def call_deepseek_sync(...): ...
+def call_llm_sync(...): ...
 # Logging
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger("scienze-bot")
@@ -188,14 +201,13 @@ async def on_message(message: discord.Message):
         "Rispondi in modo chiaro e adatto a studenti."
     )
 
-    combined_prompt = f"{system_prompt}\n\n{user_prompt}"
-
-    loop = asyncio.get_event_loop()
-    try:
-        answer_text = await loop.run_in_executor(None, lambda: call_hf_inference_sync(combined_prompt))
-    except Exception as e:
-        await message.channel.send(f"Errore durante la generazione della risposta (HuggingFace): {e}")
-        return
+loop = asyncio.get_event_loop()
+try:
+    # usa il provider configurato (deepseek o fallback huggingface)
+    answer_text = await loop.run_in_executor(None, lambda: call_llm_sync(system_prompt, user_prompt))
+except Exception as e:
+    await message.channel.send(f"Errore durante la generazione della risposta (LLM): {e}")
+    return
 
     # Invia risultato testuale in canale
     try:
