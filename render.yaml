@@ -1,0 +1,20 @@
+services:
+  - type: web
+    name: scienze-bot
+    env: docker
+    repo: https://github.com/COGLIANDOLO02982/scienze
+    branch: main
+    dockerfilePath: Dockerfile
+    plan: free
+    buildCommand: ''
+    startCommand: ''
+    envVars:
+      - key: DISCORD_TOKEN
+        value: ''
+        fromDatabase: false
+      - key: HUGGINGFACE_API_KEY
+        value: ''
+        fromDatabase: false
+      - key: PORT
+        value: '8080'
+        fromDatabase: false
